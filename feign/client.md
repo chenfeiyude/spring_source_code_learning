@@ -1,23 +1,81 @@
-```java/*
+# File path
+feign-core-10.1.0.jar/feign/client.class
 
- * Copyright 2013 Netflix, Inc.
+# Code analyse
+
+1. create a connection instance based on request url (http -> HttpURLConnection, https -> HttpsURLConnection).  
+```java
+      HttpURLConnection convertAndSend(Request request, Options options) throws IOException {
+      final HttpURLConnection connection =
+          (HttpURLConnection) new URL(request.url()).openConnection();
+      if (connection instanceof HttpsURLConnection) {
+        HttpsURLConnection sslCon = (HttpsURLConnection) connection;
+        if (sslContextFactory != null) {
+          sslCon.setSSLSocketFactory(sslContextFactory);
+        }
+        if (hostnameVerifier != null) {
+          sslCon.setHostnameVerifier(hostnameVerifier);
+        }
+      }
+```
+2. set properties like conn and read timeout, request methods, request headers, etc.
+```
+      connection.setConnectTimeout(options.connectTimeoutMillis());
+      connection.setReadTimeout(options.readTimeoutMillis());
+      connection.setAllowUserInteraction(false);
+      connection.setInstanceFollowRedirects(options.isFollowRedirects());
+      connection.setRequestMethod(request.httpMethod().name());
+
+      for (String value : request.headers().get(field)) {
+          if (field.equals(CONTENT_LENGTH)) {
+            if (!gzipEncodedRequest && !deflateEncodedRequest) {
+              contentLength = Integer.valueOf(value);
+              connection.addRequestProperty(field, value);
+            }
+          } else {
+            connection.addRequestProperty(field, value);
+          }
+        }
+      
+```
+3. read response status and headers
+```java
+      int status = connection.getResponseCode();
+      String reason = connection.getResponseMessage();
+      
+      for (Map.Entry<String, List<String>> field : connection.getHeaderFields().entrySet()) {
+```
+4. read response data or error from diff streams depends on response code. httpcode >= 400 is error response
+```java
+      if (status >= 400) {
+        stream = connection.getErrorStream();
+      } else {
+        stream = connection.getInputStream();
+      }
+```
+
+5. create response and return.
+
+
+# Source code
+```java
+
+ /**
+ * Copyright 2012-2018 The Feign Authors
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+ * in compliance with the License. You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Unless required by applicable law or agreed to in writing, software distributed under the License
+ * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+ * or implied. See the License for the specific language governing permissions and limitations under
+ * the License.
  */
 package feign;
 
 import static java.lang.String.format;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -29,13 +87,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.zip.DeflaterOutputStream;
 import java.util.zip.GZIPOutputStream;
-
 import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLSocketFactory;
-
 import feign.Request.Options;
-
 import static feign.Util.CONTENT_ENCODING;
 import static feign.Util.CONTENT_LENGTH;
 import static feign.Util.ENCODING_DEFLATE;
@@ -72,12 +127,11 @@ public interface Client {
     @Override
     public Response execute(Request request, Options options) throws IOException {
       HttpURLConnection connection = convertAndSend(request, options);
-      return convertResponse(connection);
+      return convertResponse(connection, request);
     }
 
     HttpURLConnection convertAndSend(Request request, Options options) throws IOException {
-      final HttpURLConnection
-          connection =
+      final HttpURLConnection connection =
           (HttpURLConnection) new URL(request.url()).openConnection();
       if (connection instanceof HttpsURLConnection) {
         HttpsURLConnection sslCon = (HttpsURLConnection) connection;
@@ -91,15 +145,13 @@ public interface Client {
       connection.setConnectTimeout(options.connectTimeoutMillis());
       connection.setReadTimeout(options.readTimeoutMillis());
       connection.setAllowUserInteraction(false);
-      connection.setInstanceFollowRedirects(true);
-      connection.setRequestMethod(request.method());
+      connection.setInstanceFollowRedirects(options.isFollowRedirects());
+      connection.setRequestMethod(request.httpMethod().name());
 
       Collection<String> contentEncodingValues = request.headers().get(CONTENT_ENCODING);
-      boolean
-          gzipEncodedRequest =
+      boolean gzipEncodedRequest =
           contentEncodingValues != null && contentEncodingValues.contains(ENCODING_GZIP);
-      boolean
-          deflateEncodedRequest =
+      boolean deflateEncodedRequest =
           contentEncodingValues != null && contentEncodingValues.contains(ENCODING_DEFLATE);
 
       boolean hasAcceptHeader = false;
@@ -149,7 +201,7 @@ public interface Client {
       return connection;
     }
 
-    Response convertResponse(HttpURLConnection connection) throws IOException {
+    Response convertResponse(HttpURLConnection connection, Request request) throws IOException {
       int status = connection.getResponseCode();
       String reason = connection.getResponseMessage();
 
@@ -176,7 +228,13 @@ public interface Client {
       } else {
         stream = connection.getInputStream();
       }
-      return Response.create(status, reason, headers, stream, length);
+      return Response.builder()
+          .status(status)
+          .reason(reason)
+          .headers(headers)
+          .request(request)
+          .body(stream, length)
+          .build();
     }
   }
 }
